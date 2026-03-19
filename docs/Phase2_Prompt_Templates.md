@@ -12,7 +12,7 @@ Same assembly pattern as Phase 1:
             - Relevant excerpt from Phase 1 analysis.md
             - Previously generated section JSONs (for cross-referencing)
 
-[TOOLS]   = read_file, search_code, read_file_full (Function Calling)
+[TOOLS]   = none (Function Calling is disabled in Phase 2 — all information comes from analysis.md)
 
 [TASK]    = TASK_PROMPT (Section 2 below — only current step)
 ```
@@ -46,8 +46,8 @@ ABSOLUTE RULES — these apply to every section you generate:
    State every count and range: "...between 5 and 100 characters."
    Never write "various," "several," "many," or "etc." Be specific.
 
-6. VERIFY BEFORE WRITING.
-   You have access to the codebase via Function Calling tools (read_file, search_code). When writing decision tables, configurable values, error handling, or any precise detail — use the tools to verify against actual code. Do not trust Phase 1 notes blindly for precise values.
+6. TRUST THE ANALYSIS.
+   Phase 1 analysis.md is your single source of truth. You do NOT have access to code files. When writing decision tables, configurable values, error handling, or any precise detail — use what is in the analysis. If a value is missing or ambiguous, mark it [TBC] rather than guessing.
 
 7. TBC FORMAT.
    When marking gaps: [TBC — description of what is needed]
@@ -303,7 +303,7 @@ Phase 1 integration inventory:
 Phase 1 AI/ML model details:
 {{ai_ml_details}}
 
-Use read_file or search_code to verify exact model names and versions if the Phase 1 data is ambiguous.
+If model names or versions are ambiguous in the Phase 1 data, mark them [TBC — confirm model version with development team].
 
 Output:
 {
@@ -331,11 +331,12 @@ d) Constraints and safety considerations — what must/must not be in the output
 e) Quality evaluation mechanisms — for each grader/validator: name, type, pass/fail definition, execution method, where results are stored
 f) Post-market monitoring — metrics, thresholds, corrective actions
 
-USE FUNCTION CALLING (read_file, search_code) to verify:
-- Every row of every decision table against actual branching logic
+Use Phase 1 analysis as your source for:
+- Every row of every decision table
 - Every configurable parameter default value
 - Every grader pass/fail criterion
 - Every error response code
+If any of these are missing or ambiguous in Phase 1, mark them [TBC].
 ```
 
 **TASK_PROMPT:**
@@ -349,7 +350,7 @@ Phase 1 feature analysis:
 Source files for this feature (pre-loaded for reference):
 {{source_file_list}}
 
-Use Function Calling tools to verify any detail before writing. Do not guess.
+Use the Phase 1 analysis to verify all details. If something is missing from the analysis, mark it [TBC]. Do not guess.
 
 Output:
 {
@@ -396,7 +397,7 @@ Phase 1 AI/ML analysis:
 Phase 1 security/privacy findings:
 {{security_findings}}
 
-Use Function Calling to verify model version strings and data-sharing patterns in code.
+If model version strings or data-sharing patterns are ambiguous in Phase 1, mark them [TBC — confirm with development team].
 
 Output:
 {
@@ -432,7 +433,7 @@ Using the Phase 1 security profile, generate Section 6.5.
 Phase 1 security analysis:
 {{security_analysis}}
 
-Use Function Calling to verify TLS version requirements and auth mechanisms in code if needed.
+If TLS version requirements or auth mechanisms are ambiguous in Phase 1, mark them [TBC — confirm with security team].
 
 Output:
 {
@@ -591,46 +592,14 @@ Be thorough but practical. Focus on issues that would matter to a regulatory rev
 
 ---
 
-## 3. FILE VERIFICATION TOOLS (Function Calling)
+## 3. NOTE ON FUNCTION CALLING
 
-These tool definitions are included in every Phase 2 API call:
+**Function Calling is disabled in Phase 2.** The LLM does not have access to code files during SDS generation.
 
-```json
-[
-  {
-    "name": "read_file",
-    "description": "Read a source file to verify a design detail before writing it into the SDS. Use paths relative to the analysis scope (e.g., 'src/main.py'). To read shared code outside the scope, prefix with ~/ (e.g., '~/shared/auth/jwt.py').",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "path": {"type": "string", "description": "File path (scope-relative or ~/repo-relative)"}
-      },
-      "required": ["path"]
-    }
-  },
-  {
-    "name": "search_code",
-    "description": "Search the codebase for a pattern to find where a value is defined or used. Set scope_only=false to search the entire repo.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "pattern": {"type": "string", "description": "Search pattern (regex)"},
-        "file_glob": {"type": "string", "description": "e.g., '*.py'"},
-        "scope_only": {"type": "boolean", "description": "true=scope only, false=full repo"}
-      },
-      "required": ["pattern"]
-    }
-  },
-  {
-    "name": "read_file_full",
-    "description": "Read complete content of a large file when read_file returned a truncated summary.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "path": {"type": "string"}
-      },
-      "required": ["path"]
-    }
-  }
-]
-```
+All information must come from `analysis.md` — the structured output of Phase 1. Phase 1 was designed to extract everything Phase 2 needs: configurable values, decision logic, error handling, integration details, and AI model versions.
+
+If the Phase 1 analysis is missing a detail:
+- Mark it `[TBC — not captured in Phase 1 analysis]`
+- Do not attempt to access code
+
+If Phase 1 analysis is consistently missing certain types of detail, improve the Phase 1 prompts and the `carry_over_files` mechanism in `src/phase1/pipeline.py`.

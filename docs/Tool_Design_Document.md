@@ -37,8 +37,7 @@ The tool calls Google Gemini API for AI reasoning and produces a .docx file that
                            ▼
                     ┌─────────────┐
                     │  git clone   │─── auth: GitHub token
-                    │  (sparse or  │─── dest: ~/.dpai_sds_gen/clones/{hash}/
-                    │   full)      │
+                    │  (depth=1)   │─── dest: ~/.dpai_sds_gen/clones/{hash}/
                     └──────┬──────┘
                            │
           ┌────────────────┼────────────────┐
@@ -46,19 +45,25 @@ The tool calls Google Gemini API for AI reasoning and produces a .docx file that
    ┌─────────────┐                  ┌──────────────┐
    │   Phase 1    │                 │  Code Reader   │
    │   Analyze    │────────────────▶│               │
-   └──────┬──────┘                  │  scope: apps/foo (primary)
-          │                         │  context: full repo (imports,
-          ▼                         │           shared libs)
-   ┌─────────────┐                  └───────┬──────┘
-   │ analysis.md  │                         │
-   │ (cached)     │                         │
-   └──────┬──────┘                          │
-          │                                 │
-          ▼                                 ▼
-   ┌─────────────┐     Gemini      ┌──────────────┐
-   │   Phase 2    │────Function───▶│  read_file    │
-   │   Generate   │    Calling     │  search_code  │
-   └──────┬──────┘                 └──────────────┘
+   └──────┬──────┘   Function       │  scope: apps/foo (primary)
+          │          Calling        │  context: full repo (imports,
+          ▼          (FC enabled)   │           shared libs)
+   ┌─────────────┐                  └──────────────┘
+   │ analysis.md  │
+   │ (cached)     │
+   └──────┬──────┘
+          │
+          ▼
+   ┌─────────────┐    analysis.md   ┌──────────────┐
+   │   Phase 2    │─── only, no ───▶│  Gemini LLM   │
+   │   Generate   │    FC           │  (no code     │
+   └──────┬──────┘                  │   access)     │
+          │                         └──────────────┘
+          ▼
+   ┌─────────────┐
+   │  sections/   │
+   │  *.json      │
+   └──────┬──────┘
           │
           ▼
    ┌─────────────┐
@@ -75,8 +80,8 @@ The tool calls Google Gemini API for AI reasoning and produces a .docx file that
 1. **GitHub URL is the only required input.** The tool parses the URL to determine repo, branch, and analysis scope. Everything else is auto-detected or optional configuration.
 2. **Scope-aware analysis.** When the URL points to a subdirectory, that directory is the primary analysis target. But the Code Reader has access to the full cloned repo, so the AI can follow imports upward into shared libraries, common packages, or repo-root configs when needed.
 3. **Clone, analyze, clean up.** The repo is cloned to a local temp directory, analyzed, and the clone is deleted after completion. Cached analysis results persist so re-runs don't require re-cloning.
-4. **Code access persists across both phases.** Phase 2 can — and should — reach back into the codebase to verify details via Gemini Function Calling.
-5. **LLM is decoupled.** The Gemini API Adapter is a clean interface. Swapping to another model later requires changing only this layer.
+4. **Function Calling in Phase 1 only.** Phase 1 uses Gemini Function Calling so the LLM can read and search code on demand. Phase 2 has FC disabled — by the time Phase 2 runs, all needed information is in `analysis.md`. This avoids wasted API calls and keeps Phase 2 fast.
+5. **LLM is decoupled.** The Gemini API Adapter is a clean interface. Model selection (`gemini-2.5-pro` vs `gemini-2.5-flash`) is controlled via the `GEMINI_MODEL` env var.
 
 ---
 
@@ -200,38 +205,19 @@ $ dpai_sds_gen run https://github.com/org/repo/tree/main/apps/foo
 
 ```bash
 # Full pipeline: clone → analyze → generate → clean up
-dpai_sds_gen run <github-url>
-
-# Phase 1 only: clone → analyze → save analysis.md → clean up
-dpai_sds_gen analyze <github-url>
-
-# Phase 2 only: clone → generate from cached analysis.md → clean up
-# (requires prior Phase 1 run; errors if no cache exists)
-dpai_sds_gen generate <github-url>
-
-# Regenerate a specific section
-dpai_sds_gen regenerate <github-url> --section 6.3
-
-# Validate generated SDS against completeness checklist
-dpai_sds_gen validate <github-url>
-
-# Set up GitHub credentials
-dpai_sds_gen auth
+python -m src.cli.main run <github-url> [options]
 ```
+
+The following subcommands are not yet implemented: `analyze`, `generate`, `regenerate`, `validate`, `auth`.
 
 ### 4.2 Key Flags
 
 ```bash
---model gemini-2.5-pro         # Gemini model (default: gemini-2.5-pro)
 --sw-number SW14552            # Software identifier
 --sw-name "My Software"        # Software name
 --output report.docx           # Output path (default: SDS-{sw-number}.docx in cwd)
---template /path/to/template   # Custom .docx template
---token ghp_xxxxx              # GitHub token (overrides stored credentials)
---config /path/to/.dpai_sds_gen.yaml  # Project config file
---verbose                      # Show detailed progress and API calls
---reanalyze                    # Force Phase 1 re-run even if cache exists
---keep-clone                   # Don't delete the cloned repo after completion
+--token ghp_xxxxx              # GitHub token (overrides GITHUB_TOKEN env var)
+--verbose / -v                 # Show detailed progress and API calls
 --max-cost 20.00               # Abort if estimated cost exceeds this (USD)
 ```
 
@@ -298,28 +284,32 @@ This means the AI naturally follows the code's own import graph outward when nee
 ### 5.2 Pipeline
 
 ```
-Step 1: File Inventory & Structural Map (scope + top-level context scan)
-         ↓
+Step 1: File Inventory & Structural Map
+         ↓  [carry_over_files: passes FILES_NEEDED files to next step]
 Step 2: Build/Deploy/Config Analysis
-         ↓
+         ↓  [carry_over_files]
 Step 3: Dependency & Integration Extraction
-         ↓
+         ↓  [carry_over_files]
 Step 4: API Surface Extraction
-         ↓
+         ↓  [carry_over_files]
 Step 5: Data Model Extraction
-         ↓
+         ↓  [carry_over_files]
 Step 6: Feature & Business Logic Deep Dive  ← heaviest step
-         ↓
+         ↓  [carry_over_files]
 Step 7: Safety & Error Handling Analysis
-         ↓
+         ↓  [carry_over_files]
 Step 8: Security Analysis
-         ↓
+         ↓  [carry_over_files]
 Step 9: Test Suite Analysis
-         ↓
+         ↓  [carry_over_files]
 Step 10: Synthesis & Gap Assessment
          ↓
 Output: ~/.dpai_sds_gen/cache/{key}/analysis.md
 ```
+
+**carry_over_files mechanism**: After each step completes, the pipeline parses any `## FILES NEEDED` section in the LLM output to identify files the LLM flagged as important but didn't read yet. These files are pre-fetched and injected at the top of the next step's context, ensuring critical files (e.g., `parameters.py`, `constants/`) are never missed.
+
+**Full context accumulation**: All completed step outputs are concatenated and passed as context to each subsequent step, so later steps benefit from earlier findings.
 
 Step 1 is slightly different in scope-aware mode: it maps the scope directory in full detail (all levels), and also does a shallow scan of the repo root to identify shared libraries, common packages, and root-level configuration that the scope might depend on.
 
@@ -417,7 +407,7 @@ Analysis so far: {...}
 
 ### 6.1 Pipeline
 
-Same as before — Phase 2 reads `analysis.md` and generates section JSONs. The clone must be available during Phase 2 for code verification.
+Phase 2 reads `analysis.md` and generates section JSONs. **Function Calling is disabled** — all needed information is already in `analysis.md`. This avoids wasted API calls and keeps Phase 2 fast and predictable.
 
 ```
 Step 1:  Generate Section 1 (Purpose) + Section 2 (Scope)
@@ -432,7 +422,7 @@ Step 5:  Generate Section 6.1 (Software Components)
           ↓
 Step 6:  Generate Section 6.2 (Software Integrations)
           ↓
-Step 7:  Generate Section 6.3 (Key Features) — per feature, one JSON each
+Step 7:  Generate Section 6.3 (Key Features) — one JSON per feature, auto-detected count
           ↓
 Step 8:  Generate Section 6.4 (AI/ML Principles) — if applicable
           ↓
@@ -447,59 +437,25 @@ Step 12: Quality validation pass
 Step 13: Assemble .docx from all section JSONs
 ```
 
-### 6.2 Code Verification via Function Calling
+### 6.2 LLM Interaction Pattern — Phase 2
 
-During Phase 2, the Code Reader is registered as Gemini Function Calling tools with scope-aware path conventions:
+```
+[SYSTEM]
+Phase 2 guidance document (includes output format rules)
 
-```python
-tools = [
-    {
-        "name": "read_file",
-        "description": "Read a source file to verify a design detail. "
-                       "Use paths relative to the analysis scope (e.g., 'src/main.py'). "
-                       "To read files outside the scope (shared libraries, root configs), "
-                       "prefix with ~/ (e.g., '~/shared/auth/jwt.py'). "
-                       "Use this whenever you need to confirm exact values, branching logic, "
-                       "error handling, or any detail before writing it into the SDS.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "path": {"type": "string", "description": "File path"}
-            },
-            "required": ["path"]
-        }
-    },
-    {
-        "name": "search_code",
-        "description": "Search the codebase for a pattern. Set scope_only=false to "
-                       "search the entire repo including shared code.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "pattern": {"type": "string"},
-                "file_glob": {"type": "string", "description": "e.g., '*.py'"},
-                "scope_only": {"type": "boolean", "description": "true=scope only, false=full repo"}
-            },
-            "required": ["pattern"]
-        }
-    },
-    {
-        "name": "read_file_full",
-        "description": "Read complete content of a large file (when read_file returned a summary).",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "path": {"type": "string"}
-            },
-            "required": ["path"]
-        }
-    }
-]
+[CONTEXT]
+Full Phase 1 analysis.md (no truncation)
+Previously generated sections (for cross-references)
+
+[TASK]
+"Generate SDS Section 6.3.1. Output as JSON matching the schema.
+ Trust the analysis document — do not attempt to read code files."
 ```
 
-Maximum function calls per section: 15.
-
-### 6.3 Section JSON Schema
+Key prompt rules enforced:
+- **TRUST THE ANALYSIS**: LLM must use `analysis.md` as ground truth, not try to access code
+- **rows format**: `table` and `decision_table` rows must always be `[[val1, val2], ...]` — never a list of dicts
+- **items format**: `bullet_list` and `numbered_list` items must be plain strings — never nested JSON objects
 
 Each section's output is structured JSON consumed by the docx engine. Content types supported:
 
@@ -515,7 +471,9 @@ Each section's output is structured JSON consumed by the docx engine. Content ty
 | `figure_placeholder` | Diagram placeholder | Highlighted yellow text |
 
 The `tbc` flag on any content item triggers yellow highlighting in docx.
-
+**Critical format constraints** (enforced in prompts and normalized in renderer):
+- `table`/`decision_table` rows: always `[[val1, val2], ...]` — the renderer normalizes common LLM variants (`{"cells": [...]}`, `{"conditions": [...], "action": "..."}`, `{"ColName": "val", ...}`) but plain lists are preferred.
+- `bullet_list`/`numbered_list` items: plain strings only — never nested JSON objects.
 Example section JSON:
 
 ```json
@@ -544,33 +502,11 @@ Example section JSON:
 }
 ```
 
-### 6.4 LLM Interaction Pattern — Phase 2
-
-Same structure as before with scope-aware context:
-
-```
-[SYSTEM]
-Phase 2 guidance document
-
-[CONTEXT]
-Analysis scope: apps/health-coach/
-Phase 1 analysis excerpt for this section: {...}
-Previously generated sections: {...}
-
-[TOOLS]
-read_file, search_code, read_file_full
-
-[TASK]
-"Generate SDS Section 6.3.1. Output as JSON matching the schema.
- Use Function Calling to verify details in code. Both scope files
- and shared code (~/prefix) are accessible."
-```
-
-### 6.5 Definitions Two-Pass
+### 6.4 Definitions Two-Pass
 
 Same as before: initial pass from Phase 1 terminology, final pass scanning all generated section content for undefined terms.
 
-### 6.6 Quality Validation (Step 12)
+### 6.5 Quality Validation (Step 12)
 
 Same as before: feed all section JSONs to Gemini with the Phase 2 quality checklist. FAIL items auto-corrected, WARN items printed to terminal.
 
@@ -601,36 +537,50 @@ def render_content(doc, item):
     match item["type"]:
         case "paragraph":
             p = doc.add_paragraph(style="Body Text")
-            run = p.add_run(item["text"])
-            run.font.name = "Times New Roman"
-            run.font.size = Pt(12)
+            add_markdown_runs(p, item["text"])   # handles **bold** and `code`
             if item.get("tbc"):
-                highlight_yellow(run)
+                highlight_yellow(p.runs[-1])
 
         case "heading":
             level_map = {3: "Heading 3", 4: "Heading 4", 5: "Heading 5"}
             doc.add_paragraph(item["text"], style=level_map[item["level"]])
 
         case "bullet_list":
-            for text in item["items"]:
-                doc.add_paragraph(text, style="List Bullet")
+            for entry in item["items"]:
+                # entry may be str, or dict {"text": "...", "items": [...]}
+                text = entry if isinstance(entry, str) else entry.get("text", "")
+                p = doc.add_paragraph(style="List Bullet")
+                add_markdown_runs(p, text)
 
         case "numbered_list":
-            for text in item["items"]:
-                doc.add_paragraph(text, style="List Number")
+            for entry in item["items"]:
+                text = entry if isinstance(entry, str) else entry.get("text", "")
+                p = doc.add_paragraph(style="List Number")
+                add_markdown_runs(p, text)
 
         case "table" | "decision_table":
-            render_table(doc, item["headers"], item["rows"])
+            render_table(doc, item)   # normalizes dict rows automatically
 
         case "note":
             p = doc.add_paragraph(style="Body Text")
             p.add_run("Note: ").bold = True
-            p.add_run(item["text"])
+            add_markdown_runs(p, item["text"])
 
         case "figure_placeholder":
             p = doc.add_paragraph(item["text"], style="Body Text")
             highlight_yellow(p.runs[0])
 ```
+
+**Inline markdown rendering** (`add_markdown_runs`): splits text on `**bold**` and `` `code` `` patterns and renders them as bold or monospace runs respectively. Plain text between markers is rendered normally.
+
+**Dict-row normalization** in `render_table`: LLM output varies; the renderer handles all known variants:
+
+| LLM format | Normalized to |
+|---|---|
+| `["val1", "val2"]` | Used as-is |
+| `{"cells": ["val1", "val2"], "tbc": true}` | `["val1", "val2"]` |
+| `{"conditions": ["c1", "c2"], "action": "a"}` | `["c1", "c2", "a"]` |
+| `{"ColName": "val", ...}` | Values ordered by header names |
 
 ### 7.3 Template Styles (matching CORPFT-010522)
 
@@ -717,86 +667,82 @@ Same as before. Token counts logged to `~/.dpai_sds_gen/cache/{key}/cost.json`. 
 dpai_sds_gen/
 ├── src/
 │   ├── cli/
-│   │   ├── main.py                # Entry point (typer)
-│   │   └── commands/
-│   │       ├── run.py             # Full pipeline
-│   │       ├── analyze.py         # Phase 1 only
-│   │       ├── generate.py        # Phase 2 only
-│   │       ├── regenerate.py      # Single section re-generation
-│   │       ├── validate.py        # SDS completeness validation
-│   │       └── auth.py            # GitHub credential setup
+│   │   ├── main.py                # Entry point (typer), run command
+│   │   └── commands/              # (reserved for future subcommands)
 │   │
 │   ├── core/
 │   │   ├── url_parser.py          # GitHub URL → RepoTarget
 │   │   ├── repo_manager.py        # Clone, cleanup, cache key generation
 │   │   ├── code_reader.py         # Scope-aware file access
-│   │   ├── config.py              # .dpai_sds_gen.yaml loading
+│   │   ├── config.py              # .env + .dpai_sds_gen.yaml loading
 │   │   └── cost_tracker.py        # Token counting and cost estimation
 │   │
 │   ├── phase1/
-│   │   ├── pipeline.py            # Phase 1 orchestrator
-│   │   ├── steps/
-│   │   │   ├── step_01_structure.py
-│   │   │   ├── step_02_build_config.py
-│   │   │   ├── step_03_dependencies.py
-│   │   │   ├── step_04_api_surface.py
-│   │   │   ├── step_05_data_models.py
-│   │   │   ├── step_06_features.py
-│   │   │   ├── step_07_safety.py
-│   │   │   ├── step_08_security.py
-│   │   │   ├── step_09_testing.py
-│   │   │   └── step_10_synthesis.py
-│   │   └── prompts/
-│   │       └── phase1_system.md
+│   │   ├── pipeline.py            # Phase 1 orchestrator (all 10 steps inline)
+│   │   │                          # includes: carry_over_files mechanism,
+│   │   │                          #           full accumulated context passing
+│   │   └── prompts.py             # System prompt + step-by-step instructions
 │   │
 │   ├── phase2/
-│   │   ├── pipeline.py            # Phase 2 orchestrator
-│   │   ├── sections/
-│   │   │   ├── sec_purpose_scope.py
-│   │   │   ├── sec_references.py
-│   │   │   ├── sec_definitions.py
-│   │   │   ├── sec_overview.py
-│   │   │   ├── sec_components.py
-│   │   │   ├── sec_integrations.py
-│   │   │   ├── sec_features.py
-│   │   │   ├── sec_ai_principles.py
-│   │   │   ├── sec_security.py
-│   │   │   ├── sec_attachments.py
-│   │   │   └── quality_check.py
-│   │   ├── prompts/
-│   │   │   └── phase2_system.md
-│   │   └── schemas/
-│   │       └── section_schema.json
+│   │   ├── pipeline.py            # Phase 2 orchestrator (all 12 sections)
+│   │   │                          # FC disabled; full analysis.md passed to each section
+│   │   ├── prompts.py             # System prompt + per-section instructions
+│   │   └── schemas/               # (reserved)
 │   │
 │   ├── llm/
-│   │   ├── adapter.py             # Gemini API wrapper
-│   │   ├── function_tools.py      # Function Calling tool definitions
-│   │   └── context_manager.py     # Context window budgeting
+│   │   └── adapter.py             # Gemini API wrapper (FC loop + retry loop separated)
 │   │
 │   └── docx_engine/
 │       ├── assembler.py           # Reads section JSONs → .docx
-│       ├── renderer.py            # Content type → docx style
-│       ├── styles.py              # Style constants
-│       └── templates/
-│           └── corpft_010522.docx
+│       ├── renderer.py            # Content type → docx elements
+│       │                          # includes: add_markdown_runs(), dict-row normalization
+│       ├── styles.py              # Style constants (fonts, colors, sizes)
+│       └── templates/             # .docx base templates
 │
 ├── tests/
 │   ├── unit/
-│   │   ├── test_url_parser.py
-│   │   ├── test_code_reader.py
-│   │   ├── test_renderer.py
-│   │   └── test_assembler.py
 │   ├── integration/
-│   │   └── test_pipeline.py
 │   └── fixtures/
-│       └── sample_repos/
+│
+├── docs/
+│   ├── Tool_Design_Document.md    # This document
+│   ├── Phase1_Code_Analysis_Guidance.md
+│   ├── Phase1_Prompt_Templates.md
+│   ├── Phase2_SDS_Generation_Guidance.md
+│   └── Phase2_Prompt_Templates.md
 │
 ├── pyproject.toml
 ├── README.md
-└── .dpai_sds_gen.yaml.example
+└── .env.example
 ```
 
----
+### Cache directory layout
+
+```
+~/.dpai_sds_gen/
+├── clones/
+│   └── {org}_{repo}_{hash}/       # Temporary (auto-deleted after run)
+└── cache/
+    └── {org}_{repo}_{scope_hash}/
+        ├── commit_sha.txt          # Cache invalidation key
+        ├── cost.json               # API call / token / cost log
+        ├── analysis.md             # Phase 1 output (all 10 steps)
+        └── sections/
+            ├── purpose_scope.json  # Section 1+2
+            ├── references.json     # Section 3
+            ├── definitions.json    # Section 4 (initial)
+            ├── overview.json       # Section 5
+            ├── components.json     # Section 6.1
+            ├── integrations.json   # Section 6.2
+            ├── feature_6_3_1.json  # Section 6.3.x (count = auto-detected features)
+            ├── feature_6_3_2.json
+            ├── ...
+            ├── ai_principles.json  # Section 6.4
+            ├── security.json       # Section 6.5
+            ├── attachments.json    # Section 7
+            ├── definitions_final.json  # Section 4 (final pass)
+            └── quality_check.json  # Quality validation results
+```
 
 ## 10. KEY TECHNICAL DECISIONS
 

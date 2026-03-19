@@ -44,16 +44,16 @@ When information is insufficient or uncertain:
 - If you suspect something might be true based on partial evidence from Phase 1, state it as: "Based on the code analysis, the software appears to [behavior]. This should be confirmed with the development team."
 - **Never** fill gaps with plausible-sounding but unverified content. A wrong SDS is worse than an incomplete one — it can lead to incorrect risk assessments, inadequate testing, and regulatory findings.
 
-### 1.4 When in Doubt, Go Back to Code
+### 1.4 When in Doubt, Trust the Analysis
 
-During SDS generation, you may realize that Phase 1 missed something, or that you need more detail to write a specific section properly. **Do not guess — go back and read the code.** Common triggers:
+Phase 2 does not have access to the codebase. All information must come from `analysis.md` — the output of Phase 1. Phase 1 was specifically designed to extract everything Phase 2 needs: configurable values, decision logic, error handling, integration details, and AI model versions.
 
-- You are writing about a feature's error handling but Phase 1 only described the happy path → Read the exception/error handling code for that feature.
-- You need to describe configurable parameters but Phase 1 only listed some → Search the config files and constants in the code.
-- You are writing about how two components interact but the data exchanged between them is unclear → Trace the API call and data transfer objects in the code.
-- You are describing a decision table but the branching conditions are ambiguous in Phase 1 notes → Read the actual conditional logic in the source code.
+If a detail is missing from `analysis.md`:
+- Mark it as `[TBC — information not captured in Phase 1 analysis]`
+- Do not invent it
+- Do not attempt to read code files
 
-Returning to code is not a failure of Phase 1 — it is an expected part of the Phase 2 process. The SDS demands a level of precision that sometimes only a targeted re-read of specific code can provide.
+If you find that Phase 1 consistently misses certain types of detail, the fix is to improve Phase 1 prompts and the `carry_over_files` mechanism — not to add code access to Phase 2.
 
 ---
 
@@ -289,7 +289,7 @@ This is where the SDS must reach maximum specificity. Whenever the code contains
 - Every row must describe a complete scenario — no ambiguity about what the software does.
 - Include default values and fallback behaviors.
 - If the logic involves randomization or probabilistic selection, state the probabilities explicitly (e.g., "with a probability of 0.5").
-- If the decision table comes from Phase 1 analysis, verify it against the code before including it. **If you cannot verify, mark the table as `[TBC — Logic to be verified against code]`.**
+- If the decision table comes from Phase 1 analysis, use it directly. If the Phase 1 analysis is ambiguous or incomplete, mark the row as `[TBC — Logic to be confirmed with development team]`.
 
 **d) Specific Constraints and Safety Considerations**
 
@@ -486,7 +486,7 @@ Before finalizing the SDS, run through the following quality checks:
 ### 5.2 Accuracy Check
 - [ ] Every factual claim in the SDS is traceable to Phase 1 analysis or direct code reading.
 - [ ] No content has been fabricated or assumed. All uncertain items are marked `[TBC]`.
-- [ ] Decision tables match the conditional logic in the code (re-verify against code if uncertain).
+- [ ] Decision tables match the conditional logic described in the Phase 1 analysis. Ambiguous rows are marked [TBC].
 - [ ] Configurable parameter values match what is in the code or configuration files.
 - [ ] AI model names and versions match what Phase 1 identified from dependency manifests and SDK calls.
 
@@ -551,9 +551,9 @@ This table serves as a clear action list for the development and quality teams t
 
 2. **Every configurable value is a design specification.** If the code has a constant, threshold, timeout, retry count, batch size, character limit, or probability weight — it belongs in the SDS with its exact value.
 
-3. **Decision tables are your most powerful tool.** Complex conditional logic is unreadable in prose. Convert it to decision tables. But verify every row against the actual code.
+3. **Decision tables are your most powerful tool.** Complex conditional logic is unreadable in prose. Convert it to decision tables. Use the Phase 1 analysis as your source; mark ambiguous rows [TBC].
 
-4. **When in doubt, go back to code.** This cannot be overstated. A single wrong value in a decision table, a missing error handling behavior, or an incorrect model version can have real consequences for a medical device. Verify before writing.
+4. **When in doubt, mark it [TBC].** Phase 2 does not have code access. A single wrong value is worse than a clearly-marked [TBC] item. Be transparent about what the analysis doesn't cover.
 
 5. **Write for the person who will test this software.** A quality engineer will read your Feature subsections and write test cases. If they cannot derive a test case from your description, the description is too vague.
 
