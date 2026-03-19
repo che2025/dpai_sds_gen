@@ -39,9 +39,7 @@ GOOGLE_CLOUD_PROJECT=your-gcp-project
 GOOGLE_CLOUD_LOCATION=us-central1
 GOOGLE_GENAI_USE_VERTEXAI=true
 
-# Model selection:
-#   gemini-2.5-pro   — best quality, ~20 min, ~$3 per run
-#   gemini-2.5-flash — faster, ~5-8 min, ~$0.30 per run
+# Gemini model to use
 GEMINI_MODEL=gemini-2.5-pro
 
 # Optional: required for private repos

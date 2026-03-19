@@ -54,11 +54,11 @@ The tool calls Google Gemini API for AI reasoning and produces a .docx file that
    └──────┬──────┘
           │
           ▼
-   ┌─────────────┐    analysis.md   ┌──────────────┐
-   │   Phase 2    │─── only, no ───▶│  Gemini LLM   │
-   │   Generate   │    FC           │  (no code     │
-   └──────┬──────┘                  │   access)     │
-          │                         └──────────────┘
+   ┌─────────────┐ 
+   │   Phase 2    │
+   │   Generate   │  
+   └──────┬──────┘                 
+          │                       
           ▼
    ┌─────────────┐
    │  sections/   │
@@ -67,7 +67,7 @@ The tool calls Google Gemini API for AI reasoning and produces a .docx file that
           │
           ▼
    ┌─────────────┐
-   │ docx Engine  │───▶  SDS-SW14552.docx
+   │ docx Engine  │───▶  SDS-SWxxxxx.docx
    │ (python-docx)│
    └─────────────┘
           │
