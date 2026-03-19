@@ -28,8 +28,11 @@ ABSOLUTE RULES — these apply to every step of your analysis:
    Primary analysis target: {scope_path or '(full repository)'}
    You have access to the full repo for shared code lookups. Focus on the scope. When you encounter imports from outside scope, you may read those files to understand dependencies.
 
-8. WHEN YOU NEED MORE CODE.
-   If provided files are insufficient, include a FILES_NEEDED section listing paths and reasons. Do not guess when you could look."""
+8. WHEN YOU NEED MORE CODE — ACT IMMEDIATELY.
+   If the provided files are insufficient, call read_file or search_code immediately to get what you need.
+   DO NOT write a "FILES NEEDED" wishlist — it will never be acted upon by any downstream process.
+   Rule: If you identify a file as important or critical during your analysis, call read_file on it before writing your output.
+   It is acceptable and expected to make 5-10 function calls per step to thoroughly verify your findings."""
 
 
 # ─── Step-specific instructions and task prompts ─────────────────────────────

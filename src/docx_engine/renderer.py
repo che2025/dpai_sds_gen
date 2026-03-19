@@ -1,5 +1,6 @@
 """Render JSON content items into python-docx elements."""
 
+import re
 from docx import Document
 from docx.shared import Pt, Inches, RGBColor, Cm
 from docx.oxml.ns import qn, nsdecls
@@ -41,16 +42,36 @@ def set_cell_shading(cell, color: str):
     cell._tc.get_or_add_tcPr().append(shading)
 
 
+def add_markdown_runs(paragraph, text: str, base_font: str, base_size, tbc: bool = False):
+    """
+    Add runs to a paragraph, parsing inline markdown:
+      **bold** -> bold run
+      `code`   -> monospace run
+      plain    -> normal run
+    """
+    pattern = re.compile(r'(\*\*[^*]+\*\*|`[^`]+`)')
+    parts = pattern.split(text)
+    any_tbc = tbc or "[TBC" in text
+    for part in parts:
+        if part.startswith('**') and part.endswith('**'):
+            run = paragraph.add_run(part[2:-2])
+            set_run_font(run, base_font, base_size, bold=True)
+        elif part.startswith('`') and part.endswith('`'):
+            run = paragraph.add_run(part[1:-1])
+            set_run_font(run, 'Courier New', base_size)
+        else:
+            run = paragraph.add_run(part)
+            set_run_font(run, base_font, base_size)
+        if any_tbc:
+            highlight_yellow(run)
+
+
 def render_paragraph(doc, item: dict):
     """Render a paragraph content item."""
     text = item.get("text", "")
     p = doc.add_paragraph()
-    run = p.add_run(text)
-    set_run_font(run, styles.BODY_FONT, styles.BODY_SIZE)
+    add_markdown_runs(p, text, styles.BODY_FONT, styles.BODY_SIZE, tbc=item.get("tbc", False))
     p.paragraph_format.space_after = styles.BODY_SPACE_AFTER
-
-    if item.get("tbc") or "[TBC" in text:
-        highlight_yellow(run)
 
 
 def render_heading(doc, item: dict, section_number: str = ""):
@@ -70,27 +91,31 @@ def render_heading(doc, item: dict, section_number: str = ""):
 
 def render_bullet_list(doc, item: dict):
     """Render a bullet list."""
-    for text in item.get("items", []):
+    for entry in item.get("items", []):
+        # LLM sometimes generates nested content dicts instead of plain strings
+        if isinstance(entry, dict):
+            sub_items = entry.get("items")
+            if sub_items:
+                render_bullet_list(doc, entry)
+                continue
+            text = entry.get("text", str(entry))
+        else:
+            text = str(entry)
         p = doc.add_paragraph(style="List Bullet")
-        # Clear default and add formatted run
         p.clear()
-        run = p.add_run(text)
-        set_run_font(run, styles.BODY_FONT, styles.BODY_SIZE)
-
-        if "[TBC" in text:
-            highlight_yellow(run)
+        add_markdown_runs(p, text, styles.BODY_FONT, styles.BODY_SIZE)
 
 
 def render_numbered_list(doc, item: dict):
     """Render a numbered list."""
-    for text in item.get("items", []):
+    for entry in item.get("items", []):
+        if isinstance(entry, dict):
+            text = entry.get("text", str(entry))
+        else:
+            text = str(entry)
         p = doc.add_paragraph(style="List Number")
         p.clear()
-        run = p.add_run(text)
-        set_run_font(run, styles.BODY_FONT, styles.BODY_SIZE)
-
-        if "[TBC" in text:
-            highlight_yellow(run)
+        add_markdown_runs(p, text, styles.BODY_FONT, styles.BODY_SIZE)
 
 
 def render_table(doc, item: dict):
@@ -122,7 +147,18 @@ def render_table(doc, item: dict):
 
     # Data rows
     for row_idx, row_data in enumerate(rows):
-        if not isinstance(row_data, list):
+        # Normalize: LLM sometimes generates rows as dicts instead of lists
+        if isinstance(row_data, dict):
+            if "cells" in row_data:
+                # {"cells": [...], "tbc": True} format
+                row_data = row_data["cells"]
+            elif "conditions" in row_data:
+                # decision_table format: {"conditions": [...], "action": "..."}
+                row_data = list(row_data["conditions"]) + [row_data.get("action", "")]
+            else:
+                # {"header_name": "value", ...} format
+                row_data = [row_data.get(h, "") for h in headers]
+        elif not isinstance(row_data, list):
             continue
         for col_idx, cell_text in enumerate(row_data):
             if col_idx >= num_cols:

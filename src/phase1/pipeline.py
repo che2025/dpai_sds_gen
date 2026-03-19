@@ -148,6 +148,25 @@ def _gather_files_for_step(step: int, reader: CodeReader) -> str:
     return "\n\n".join(files_content)
 
 
+def _parse_files_needed(response: str) -> list[str]:
+    """Extract file paths from ## FILES NEEDED sections in a step's analysis output."""
+    import re
+    paths = []
+    in_section = False
+    for line in response.split('\n'):
+        if re.search(r'##\s*FILES?\s*(NEEDED|REQUIRED)', line, re.IGNORECASE):
+            in_section = True
+            continue
+        if in_section:
+            if line.startswith('#'):
+                break  # Hit next section
+            for match in re.findall(r'`([^`]+)`', line):
+                # Accept paths: contain a slash, or end in a known extension
+                if ('/' in match or re.search(r'\.\w{2,5}$', match)) and match not in paths:
+                    paths.append(match)
+    return paths[:8]  # Cap at 8 files to avoid blowing up context
+
+
 def run_phase1(
     reader: CodeReader,
     gemini: GeminiAdapter,
@@ -169,6 +188,7 @@ def run_phase1(
 
     system_prompt = prompts.core_principles(scope_path)
     accumulated_analysis = []
+    carry_over_files: list[str] = []  # Critical files identified by previous step
 
     console.print("\n[bold blue]═══ Phase 1: Code Analysis ═══[/bold blue]\n")
 
@@ -185,6 +205,15 @@ def run_phase1(
             files_content = ""
         else:
             files_content = _gather_files_for_step(step, reader)
+            # Pre-fetch files identified as critical by the previous step
+            if carry_over_files:
+                extra = []
+                for path in carry_over_files:
+                    content = reader.read_file(path)
+                    if not content.startswith("[FILE NOT FOUND"):
+                        extra.append(f"--- File: {path} (critical — carried over from previous step) ---\n{content[:20000]}")
+                if extra:
+                    files_content = "\n\n".join(extra) + "\n\n" + files_content
 
         # Build user message
         task_prompt = prompts.TASK_PROMPTS.get(step, "")
@@ -195,7 +224,7 @@ def run_phase1(
             identify_prompt = (
                 f"Based on the analysis so far, identify the main features/modules "
                 f"in this software that need individual deep-dive analysis.\n\n"
-                f"Previous analysis:\n{chr(10).join(accumulated_analysis[-3:])}\n\n"
+                f"Previous analysis:\n{'---'.join(accumulated_analysis)}\n\n"
                 f"List each feature with: name, brief description, and key source files.\n"
                 f"Output as a simple list."
             )
@@ -210,7 +239,7 @@ def run_phase1(
 
             # Then analyze each feature (simplified: do one combined deep dive)
             user_message = (
-                f"Previous analysis:\n{chr(10).join(accumulated_analysis[-3:])}\n\n"
+                f"Previous analysis:\n{'---'.join(accumulated_analysis)}\n\n"
                 f"Identified features:\n{features_response}\n\n"
                 f"Source files:\n{files_content}\n\n"
                 f"{task_prompt.replace('{feature_name}', 'ALL FEATURES')}\n\n"
@@ -219,9 +248,7 @@ def run_phase1(
         else:
             context = ""
             if accumulated_analysis:
-                # Include last 2 step results as context
-                recent = accumulated_analysis[-2:]
-                context = f"Analysis from previous steps:\n{'---'.join(recent)}\n\n"
+                context = f"Analysis from previous steps:\n{'---'.join(accumulated_analysis)}\n\n"
 
             user_message = f"{context}Files for analysis:\n{files_content}\n\n{task_prompt}"
 
@@ -235,6 +262,9 @@ def run_phase1(
         )
 
         accumulated_analysis.append(f"# Step {step}: {step_name}\n\n{response}")
+        carry_over_files = _parse_files_needed(response)
+        if carry_over_files and verbose:
+            console.print(f"  [dim]Carrying forward {len(carry_over_files)} file(s) to next step: {carry_over_files}[/dim]")
         cost_tracker.display()
         console.print(f"  [green]✓ Step {step} complete[/green]\n")
 
