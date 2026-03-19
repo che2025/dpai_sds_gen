@@ -165,8 +165,8 @@ def run_phase2(
                 result = gemini.generate_json(
                     system_prompt=section_system,
                     user_message=user_message,
-                    code_reader=reader,
-                    enable_function_calling=True,
+                    code_reader=None,
+                    enable_function_calling=False,
                     phase="phase2",
                 )
                 _save_section(sections_dir, feat_key, result)
@@ -202,19 +202,19 @@ def run_phase2(
             all_content = json.dumps(all_sections, indent=2, ensure_ascii=False)
             extra_context = (
                 f"\nCurrent definitions:\n{json.dumps(current_defs, indent=2, ensure_ascii=False)}\n"
-                f"\nAll section content:\n{all_content[:50000]}\n"
+                f"\nAll section content:\n{all_content}\n"
             )
 
         elif section_key == "quality_check":
             all_content = json.dumps(all_sections, indent=2, ensure_ascii=False)
-            extra_context = f"\nComplete SDS content:\n{all_content[:80000]}\n"
+            extra_context = f"\nComplete SDS content:\n{all_content}\n"
 
         elif section_key == "attachments":
             all_content = json.dumps(all_sections, indent=2, ensure_ascii=False)
-            extra_context = f"\nAll sections (scan for TBC):\n{all_content[:60000]}\n"
+            extra_context = f"\nAll sections (scan for TBC):\n{all_content}\n"
 
         user_message = (
-            f"Phase 1 analysis:\n{analysis_text[:40000]}\n\n"
+            f"Phase 1 analysis:\n{analysis_text}\n\n"
             f"Previously generated sections:\n{prev_summary}\n"
             f"{extra_context}\n"
             f"{task}"
@@ -222,14 +222,11 @@ def run_phase2(
 
         section_system = system_prompt + "\n\n" + instructions
 
-        # Most sections use function calling for verification
-        use_fc = section_key not in ("purpose_scope", "definitions", "definitions_final", "quality_check")
-
         result = gemini.generate_json(
             system_prompt=section_system,
             user_message=user_message,
-            code_reader=reader if use_fc else None,
-            enable_function_calling=use_fc,
+            code_reader=None,
+            enable_function_calling=False,
             phase="phase2",
         )
 
